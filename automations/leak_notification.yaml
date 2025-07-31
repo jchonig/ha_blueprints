@@ -1,0 +1,34 @@
+blueprint:
+  name: Leak Detection & Notification
+  description: Send a notification when any configured moisture sensor becomes moist
+  domain: automation
+  input:
+    notify_device:
+      name: Notify device
+      description: "The device where the notification should be sent to."
+      selector:
+        device:
+          integration: mobile_app
+          multiple: true
+    moisture_sensors:
+      name: Moisture Sensors
+      description: 'Select the moisture sensors to mintor'
+      selector:
+        entity:
+          domain: binary_sensor
+          device_class: moisture
+          multiple: true
+
+trigger:
+  - platform: state
+    entity_id: !input moisture_sensors
+    to: "on"
+
+action:
+  device_id: !input notify_device
+  domain: mobile_app
+  type: notify
+  title: "Leak detected!"
+  message: "{{ trigger.to_state.name }} has detected a leak."
+
+mode: queued
