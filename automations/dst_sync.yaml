@@ -1,10 +1,13 @@
 blueprint:
-  name: Auto Daylight Saving Sync for Devices
+  name: 🕑 Auto Daylight Saving Sync for Devices
   description: >
-    Automatically finds select entities whose entity_id matches one or more regex patterns
-    (default: entities matching "_daylight_saving$"), and synchronizes
-    their daylight saving setting daily.
-    It runs daily to ensure it did not miss the daylight saving switch.
+    🕑 Automatically finds entities whose name matches a list of
+    regular exprestions and synchronizes their daylight saving setting
+    daily.
+
+    🚀 Version 2025.11.04.1
+
+    Runs daily to ensure it did not miss the daylight saving switch.
 
     Supports options like On/Off, Enable/Disable, Enabled/Disabled, Yes/No, etc.
 
