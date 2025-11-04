@@ -1,0 +1,121 @@
+blueprint:
+  name: Auto Daylight Saving Sync for Devices
+  description: >
+    Automatically finds select entities whose entity_id matches one or more regex patterns
+    (default: entities matching "_daylight_saving$"), and synchronizes
+    their daylight saving setting daily.
+    It runs daily to ensure it did not miss the daylight saving switch.
+
+    Supports options like On/Off, Enable/Disable, Enabled/Disabled, Yes/No, etc.
+
+    Please ensure that the Daylight Saving configuration option for
+    your device(s) is enabled.
+  domain: automation
+
+  input:
+    run_time:
+      name: Run Time
+      description: >
+        Time of day to perform daylight saving synchronization.
+      default: "02:01:00"
+      selector:
+        time:
+
+    match_patterns:
+      name: Entity ID match patterns
+      description: >
+        List of regular expressions to match entity IDs of selects that control daylight saving.
+        Example: `.*_daylight_saving$`, `.*_dst_mode$`, etc.
+      default:
+        - ".*_daylight_saving$"
+      selector:
+        text:
+          multiple: true
+
+    exclude_devices:
+      name: Devices to exclude
+      description: >
+        Devices to skip (all matching selects under these devices will be ignored).
+      default: []
+      selector:
+        device:
+          multiple: true
+
+mode: single
+
+trigger:
+  - platform: time
+    at: !input run_time
+
+variables:
+  exclude_devices: !input exclude_devices
+  match_patterns: !input match_patterns
+  is_dst: >
+    {{ now().timetuple().tm_isdst == 1 }}
+
+  # Build a list of all matching select entities using a namespace
+  all_daylight_saving_entities: >
+    {% set ns = namespace(matched=[]) %}
+    {% for s in expand(states.select) %}
+      {% for pat in match_patterns %}
+        {% if s.entity_id is match(pat) %}
+          {% set ns.matched = ns.matched + [s.entity_id] %}
+          {% break %}
+        {% endif %}
+      {% endfor %}
+    {% endfor %}
+    {{ ns.matched }}
+
+  # Exclude entities belonging to excluded devices
+  filtered_entities: >
+    {% set ns = namespace(filtered=[]) %}
+    {% for e in all_daylight_saving_entities %}
+      {% set dev = device_id(e) if device_id(e) is defined else None %}
+      {% if dev not in exclude_devices %}
+        {% set ns.filtered = ns.filtered + [e] %}
+      {% endif %}
+    {% endfor %}
+    {{ ns.filtered }}
+
+action:
+  - repeat:
+      for_each: "{{ filtered_entities }}"
+      sequence:
+        - variables:
+            options: "{{ state_attr(repeat.item, 'options') | default([]) }}"
+            enable_opt: >
+              {% set opts = options | map('lower') | list %}
+              {% for opt in opts %}
+                {% if 'on' in opt or 'enable' in opt or opt in ['yes','true'] %}
+                  {{ options[loop.index0] }}
+                  {% break %}
+                {% endif %}
+              {% endfor %}
+            disable_opt: >
+              {% set opts = options | map('lower') | list %}
+              {% for opt in opts %}
+                {% if 'off' in opt or 'disable' in opt or opt in ['no','false'] %}
+                  {{ options[loop.index0] }}
+                  {% break %}
+                {% endif %}
+              {% endfor %}
+            selected_opt: >
+              {% if is_dst %}
+                {{ enable_opt if enable_opt|length > 0 else options[0] if options|length > 0 else '' }}
+              {% else %}
+                {{ disable_opt if disable_opt|length > 0 else options[-1] if options|length > 0 else '' }}
+              {% endif %}
+
+        - condition: template
+          value_template: "{{ states(repeat.item) != selected_opt }}"
+
+        - service: select.select_option
+          data:
+            entity_id: "{{ repeat.item }}"
+            option: "{{ selected_opt }}"
+
+        # Log the change
+        - service: system_log.write
+          data:
+            level: warning
+            message: "DST sync: {{ repeat.item }} updated to '{{ selected_opt }}'"
