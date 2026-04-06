@@ -12,7 +12,7 @@ blueprint:
           multiple: true
     moisture_sensors:
       name: Moisture Sensors
-      description: 'Select the moisture sensors to mintor'
+      description: 'Select the moisture sensors to monitor'
       selector:
         entity:
           domain: binary_sensor
@@ -25,10 +25,13 @@ trigger:
     to: "on"
 
 action:
-  device_id: !input notify_device
-  domain: mobile_app
-  type: notify
-  title: "Leak detected!"
-  message: "{{ trigger.to_state.name }} has detected a leak."
+  - repeat:
+      for_each: !input notify_device
+      sequence:
+        - device_id: "{{ repeat.item }}"
+          domain: mobile_app
+          type: notify
+          title: "Leak detected!"
+          message: "{{ trigger.to_state.name }} has detected a leak."
 
 mode: queued

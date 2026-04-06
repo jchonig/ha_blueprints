@@ -2,10 +2,10 @@ blueprint:
   name: 🕑 Auto Daylight Saving Sync for Devices
   description: >
     🕑 Automatically finds entities whose name matches a list of
-    regular exprestions and synchronizes their daylight saving setting
+    regular expressions and synchronizes their daylight saving setting
     daily.
 
-    🚀 Version 2025.11.04.1
+    🚀 Version 2026.04.05
 
     Runs daily to ensure it did not miss the daylight saving switch.
 
@@ -88,34 +88,40 @@ action:
             options: "{{ state_attr(repeat.item, 'options') | default([]) }}"
             enable_opt: >
               {% set opts = options | map('lower') | list %}
+              {% set result = namespace(val='') %}
               {% for opt in opts %}
                 {% if 'on' in opt or 'enable' in opt or opt in ['yes','true'] %}
-                  {{ options[loop.index0] }}
+                  {% set result.val = options[loop.index0] %}
                   {% break %}
                 {% endif %}
               {% endfor %}
+              {{ result.val }}
             disable_opt: >
               {% set opts = options | map('lower') | list %}
+              {% set result = namespace(val='') %}
               {% for opt in opts %}
                 {% if 'off' in opt or 'disable' in opt or opt in ['no','false'] %}
-                  {{ options[loop.index0] }}
+                  {% set result.val = options[loop.index0] %}
                   {% break %}
                 {% endif %}
               {% endfor %}
+              {{ result.val }}
             selected_opt: >
+              {% set en = enable_opt | trim %}
+              {% set dis = disable_opt | trim %}
               {% if is_dst %}
-                {{ enable_opt if enable_opt|length > 0 else options[0] if options|length > 0 else '' }}
+                {{ en if en | length > 0 else options[0] if options | length > 0 else '' }}
               {% else %}
-                {{ disable_opt if disable_opt|length > 0 else options[-1] if options|length > 0 else '' }}
+                {{ dis if dis | length > 0 else options[-1] if options | length > 0 else '' }}
               {% endif %}
 
         - condition: template
-          value_template: "{{ states(repeat.item) != selected_opt }}"
+          value_template: "{{ states(repeat.item) != selected_opt | trim }}"
 
         - service: select.select_option
           data:
             entity_id: "{{ repeat.item }}"
-            option: "{{ selected_opt }}"
+            option: "{{ selected_opt | trim }}"
 
         # Log the change
         - service: system_log.write
