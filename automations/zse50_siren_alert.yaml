@@ -1,0 +1,75 @@
+blueprint:
+  name: 🔔 ZSE50 Siren Alert
+  description: >
+    🔔 Creates a callable script that plays a specific tone on one or more
+    ZSE50 siren devices.
+
+    🚀 Version 2026.06.30
+
+    Create one script instance per alert sound you need (chime, alarm,
+    doorbell, etc.). Call the generated script from other automations as
+    an action — no helper entities required.
+
+    Tone can be specified by name (e.g. "doorbell1.mp3 (7 sec)") or by
+    number (e.g. "12"). Available tone names are listed in the
+    available_tones attribute of any siren entity on your device.
+  domain: script
+  homeassistant:
+    min_version: "2024.6.0"
+
+  input:
+    siren_devices:
+      name: Siren Devices
+      description: >
+        One or more ZSE50 siren devices to play the alert on.
+      selector:
+        device:
+          entity:
+            domain: siren
+          multiple: true
+
+    tone:
+      name: Tone
+      description: >
+        Sound to play — enter a tone name (e.g. "doorbell1.mp3 (7 sec)") or
+        tone number (e.g. "12"). Check the available_tones attribute on any
+        siren entity for the full list.
+      default: "1"
+      selector:
+        text:
+
+    volume_level:
+      name: Volume Level
+      description: >
+        Playback volume from 0.0 (silent) to 1.0 (full volume).
+      default: 0.5
+      selector:
+        number:
+          min: 0.0
+          max: 1.0
+          step: 0.05
+          mode: slider
+
+mode: queued
+
+sequence:
+  - variables:
+      siren_devices: !input siren_devices
+      tone_input: !input tone
+      first_device: "{{ siren_devices if siren_devices is string else siren_devices | first }}"
+      siren_entity: "{{ device_entities(first_device) | select('match', 'siren\\..*') | first }}"
+      available_tones: "{{ state_attr(siren_entity, 'available_tones') | default({}) }}"
+      tone_id: >
+        {% set ns = namespace(result=tone_input) %}
+        {% for key, val in available_tones.items() %}
+          {% if val == tone_input or val.split('.mp3')[0] == tone_input %}
+            {% set ns.result = key %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.result }}
+  - action: siren.turn_on
+    target:
+      device_id: !input siren_devices
+    data:
+      tone: "{{ tone_id }}"
+      volume_level: !input volume_level
