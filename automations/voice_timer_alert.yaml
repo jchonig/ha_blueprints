@@ -1,0 +1,485 @@
+blueprint:
+  name: Voice Timer
+  description: |-
+    Start a Home Assistant `timer` helper by voice, with a spoken
+    confirmation of the duration.
+
+    Optionally shows a live countdown on your phone (Notify actions
+    only — see Show live countdown below).
+
+    When it finishes, on the same Assist satellite / media player that
+    heard the start command:
+    - Loops a sound file, spoken TTS, or both
+    - Pushes a phone notification with a Stop button
+
+    Silence it by:
+    - Saying a stop phrase (optionally naming the timer, so concurrent
+      timers don't stop each other)
+    - Tapping the notification button
+    - Pressing the physical button on the originating satellite
+    - Saying a stop phrase before it finishes cancels it outright
+
+    🚀 Version 2026.07.20.1
+
+    Setup:
+    - Only the `timer` helper itself needs to be created by hand
+    - Default duration comes from the timer helper's own configured
+      duration
+    - Everything else (which device to reply to, the alert loop) is
+      tracked inside this automation's own runs instead of extra
+      helpers, so multiple timers can run at once without interfering
+    - Trade-off: a Home Assistant restart mid-countdown or mid-alert
+      loses that in-progress run
+  domain: automation
+  input:
+    timer_entity:
+      name: Timer helper
+      description: The `timer` helper this blueprint starts and watches.
+      selector:
+        entity:
+          domain: timer
+
+    fallback_media_player:
+      name: Fallback media player
+      description: >-
+        Optional. Used only if the start command didn't come from a
+        satellite device with its own media_player (e.g. typed into the
+        Assist chat window, or from a voice assistant without a
+        speaker). If left blank and no such device is found, the alert
+        sound/TTS is skipped (the phone notification, if configured,
+        still fires).
+      default: ""
+      selector:
+        entity:
+          domain: media_player
+
+    alarm_mode:
+      name: Alert type
+      description: >-
+        Sound file, spoken text-to-speech, or both, on repeat until
+        stopped. Text-to-speech only works when the start command came
+        from an Assist satellite; it's silently skipped for the
+        fallback player.
+      default: sound
+      selector:
+        select:
+          mode: dropdown
+          options:
+            - value: sound
+              label: Sound file
+            - value: tts
+              label: Text-to-speech
+            - value: both
+              label: Sound file + text-to-speech
+
+    alarm_sound:
+      name: Alarm sound media
+      description: >-
+        Used when Alert type is Sound file or Sound file +
+        text-to-speech. e.g. media-source://media_source/local/alarm.mp3,
+        or any URL your media players can play. The default assumes a
+        file named alarm.mp3 directly in your Home Assistant `/media`
+        folder — media-source://media_source/local/X means /media/X,
+        not /media/local/X.
+      default: "media-source://media_source/local/alarm.mp3"
+      selector:
+        text:
+
+    tts_message:
+      name: Text-to-speech / notification message
+      description: >-
+        Also used as the phone notification's message text. As a
+        repeating spoken alert, it's said on each repeat when Alert
+        type is Text-to-speech or Sound file + text-to-speech, using
+        the same Assist satellite's own configured voice/engine — that
+        part only works when the start command came from a satellite
+        (not the fallback player), and is skipped otherwise. Leave
+        blank to use "<timer name> is done" instead.
+      default: ""
+      selector:
+        text:
+
+    repeat_interval:
+      name: Repeat interval
+      description: >-
+        Seconds between loops of the alarm sound. Set roughly to the
+        length of the sound file itself.
+      default: 15
+      selector:
+        number:
+          min: 1
+          max: 60
+          unit_of_measurement: seconds
+
+    notify_actions:
+      name: Notify actions
+      description: >-
+        Optional. List of notify actions to call (e.g.
+        notify.mobile_app_myphone) — check Developer Tools > Actions
+        for the exact name for your device. Gets the full alert: Stop
+        button, critical-alert sound, and tag-based clear/replace.
+        Leave empty to skip.
+      default: []
+      selector:
+        object:
+
+    notify_entities:
+      name: Notify entities
+      description: >-
+        Optional. Notify entities to push a plain notification to,
+        picked from a list instead of typed. Only title + message —
+        no Stop button, critical-alert sound, or tag-based
+        clear/replace (use Notify actions above for those). Leave
+        empty to skip.
+      default: []
+      selector:
+        entity:
+          domain: notify
+          multiple: true
+
+    show_progress:
+      name: Show live countdown in notification (Notify actions only)
+      description: >-
+        Optional. Requires Notify actions above — Notify entities
+        can't support this (its notify.send_message action rejects
+        any extra data). Uses the companion app's Live Activity (iOS)
+        / Live Update (Android) chronometer so the countdown ticks
+        live on the lock screen/notification without repeated pushes.
+        Bleeding-edge: needs iOS 17.2+ with the Labs feature enabled
+        in TestFlight, or Android 16+ for the full status-bar chip,
+        and HA Core 2026.7+ on both. Leave off (default) to keep only
+        the existing finished-alert notification.
+      default: false
+      selector:
+        boolean:
+
+    start_sentences:
+      name: Start sentences
+      description: |-
+        Sentences that start the timer. Replace YOUR_TIMER_NAME with
+        this timer's actual name in each instance you create.
+
+        The article ("a"/"the") and duration clause are both
+        optional, and duration accepts minutes or seconds — e.g.
+        "start coffee timer", "start the coffee timer for 1 minute",
+        "set a coffee timer for 30 seconds" all match, once edited.
+      default:
+        - "(start|set)[ (a|the)] YOUR_TIMER_NAME[ for ({0..180:minutes} (minute|minutes)|{0..180:seconds} (second|seconds))]"
+      selector:
+        object:
+
+    stop_sentences:
+      name: Stop sentences
+      description: |-
+        Sentences that cancel the timer while running, or silence the
+        alert once it's gone off.
+
+        {name} is a wildcard, checked at runtime against this timer
+        helper's own name — so e.g. "stop coffee timer" only stops
+        that instance, not other timers running at the same time. The
+        timer's name must be said; there's no plain "stop the timer"
+        fallback.
+      default:
+        - "stop {name}"
+        - "cancel {name}"
+      selector:
+        object:
+
+variables:
+  timer_entity_id: !input timer_entity
+  fallback_player_id: !input fallback_media_player
+  alarm_mode: !input alarm_mode
+  notify_actions: !input notify_actions
+  notify_entities: !input notify_entities
+  show_progress: !input show_progress
+  timer_name: "{{ state_attr(timer_entity_id, 'friendly_name') or timer_entity_id }}"
+  tts_message_input: !input tts_message
+  alert_message: >-
+    {% set msg = (tts_message_input | default('', true)) | trim %}
+    {{ msg if msg else timer_name ~ ' is done' }}
+  default_duration_seconds: >-
+    {% set d = state_attr(timer_entity_id, 'duration') %}
+    {% set parts = d.split(':') if d else ['0', '10', '0'] %}
+    {{ parts[0] | int(0) * 3600 + parts[1] | int(10) * 60 + parts[2] | int(0) }}
+
+triggers:
+  - trigger: conversation
+    command: !input start_sentences
+    id: start
+  - trigger: event
+    id: continue
+    event_type: voice_timer_alert_continue
+    event_data:
+      timer_entity_id: !input timer_entity
+
+conditions: []
+
+actions:
+  - choose:
+      # ================= Heard by voice: start + acknowledge, then hand off =================
+      - conditions:
+          - condition: trigger
+            id: start
+        sequence:
+          - variables:
+              duration_seconds: >-
+                {% if trigger.slots.seconds is defined %}
+                  {{ trigger.slots.seconds | int }}
+                {% elif trigger.slots.minutes is defined %}
+                  {{ trigger.slots.minutes | int * 60 }}
+                {% else %}
+                  {{ default_duration_seconds }}
+                {% endif %}
+              duration_text: >-
+                {% set total = duration_seconds | int %}
+                {% set m = total // 60 %}
+                {% set s = total % 60 %}
+                {% if m > 0 and s > 0 -%}
+                  {{ m }} minute{{ 's' if m != 1 else '' }}
+                  {{ s }} second{{ 's' if s != 1 else '' }}
+                {%- elif m > 0 -%}
+                  {{ m }} minute{{ 's' if m != 1 else '' }}
+                {%- else -%}
+                  {{ s }} second{{ 's' if s != 1 else '' }}
+                {%- endif %}
+
+          - action: timer.start
+            target:
+              entity_id: "{{ timer_entity_id }}"
+            data:
+              duration: >-
+                {% set total = duration_seconds | int %}
+                {{ '%02d:%02d:%02d' % (total // 3600, (total % 3600) // 60, total % 60) }}
+
+          - set_conversation_response: "Starting {{ timer_name }} for {{ duration_text }}."
+
+          # Optional: begin a Live Activity/Live Update countdown notification.
+          # Must happen before the event handoff below — once mode: restart
+          # cancels this run, nothing after the event fire would execute.
+          - if:
+              - condition: template
+                value_template: "{{ show_progress }}"
+            then:
+              - repeat:
+                  for_each: "{{ notify_actions }}"
+                  sequence:
+                    - action: "{{ repeat.item }}"
+                      data:
+                        title: "{{ timer_name }}"
+                        message: "{{ duration_text }} remaining"
+                        data:
+                          tag: "ha_timer_alert"
+                          live_update: true
+                          chronometer: true
+                          when: "{{ duration_seconds }}"
+                          when_relative: true
+
+          # Hand off to a decoupled run so this conversation turn — and any
+          # media ducking tied to it — ends here instead of for the whole countdown.
+          - event: voice_timer_alert_continue
+            event_data:
+              timer_entity_id: "{{ timer_entity_id }}"
+              device_id: "{{ trigger.device_id | default('', true) }}"
+
+      # ================= Decoupled: wait for finish/cancel, then alert =================
+      - conditions:
+          - condition: trigger
+            id: continue
+        sequence:
+          - variables:
+              start_device_id: "{{ trigger.event.data.device_id }}"
+              target_button: >-
+                {% set ents = device_entities(start_device_id)
+                   if start_device_id not in ['', 'unknown', 'unavailable', none]
+                   else [] %}
+                {% set buttons = ents | select('match', '^event\\..*_button_press$') | list %}
+                {{ buttons[0] if buttons else '' }}
+
+          # ---------- Wait inline for this timer to finish, or a cancel ----------
+          # A named stop phrase that doesn't match this timer is ignored and
+          # the wait resumes, so concurrent timers don't cancel each other.
+          - repeat:
+              until:
+                - condition: template
+                  value_template: >-
+                    {% set name_slot = wait.trigger.slots.name
+                       if wait.trigger is not none and wait.trigger.slots is defined
+                          and 'name' in wait.trigger.slots
+                       else none %}
+                    {{ wait.trigger is not none and
+                       (name_slot is none or
+                        (name_slot | lower) in (timer_name | lower) or
+                        (timer_name | lower) in (name_slot | lower)) }}
+              sequence:
+                - wait_for_trigger:
+                    - trigger: event
+                      id: finished
+                      event_type: timer.finished
+                      event_data:
+                        entity_id: !input timer_entity
+                    - trigger: conversation
+                      id: cancel
+                      command: !input stop_sentences
+                    - trigger: event
+                      id: cancel
+                      event_type: state_changed
+                      event_data:
+                        entity_id: "{{ target_button }}"
+
+          - if:
+              - condition: template
+                value_template: "{{ wait.trigger is not none and wait.trigger.id == 'cancel' }}"
+            then:
+              - action: timer.cancel
+                target:
+                  entity_id: "{{ timer_entity_id }}"
+              - set_conversation_response: "Cancelled {{ timer_name }}."
+              - if:
+                  - condition: template
+                    value_template: "{{ show_progress }}"
+                then:
+                  - repeat:
+                      for_each: "{{ notify_actions }}"
+                      sequence:
+                        - action: "{{ repeat.item }}"
+                          data:
+                            message: "clear_notification"
+                            data:
+                              tag: "ha_timer_alert"
+              - stop: "Timer cancelled before it finished"
+
+          - variables:
+              target_player: >-
+                {% set ents = device_entities(start_device_id)
+                   if start_device_id not in ['', 'unknown', 'unavailable', none]
+                   else [] %}
+                {% set players = ents | select('match', '^media_player\\.') | list %}
+                {{ players[0] if players else fallback_player_id }}
+              target_satellite: >-
+                {% set ents = device_entities(start_device_id)
+                   if start_device_id not in ['', 'unknown', 'unavailable', none]
+                   else [] %}
+                {% set sats = ents | select('match', '^assist_satellite\\.') | list %}
+                {{ sats[0] if sats else '' }}
+
+          - if:
+              - condition: template
+                value_template: "{{ show_progress }}"
+            then:
+              - repeat:
+                  for_each: "{{ notify_actions }}"
+                  sequence:
+                    - action: "{{ repeat.item }}"
+                      data:
+                        title: "Timer finished"
+                        message: "{{ alert_message }}"
+                        data:
+                          tag: "ha_timer_alert"
+                          live_update: true
+                          push:
+                            sound:
+                              name: default
+                              critical: 1
+                              volume: 1.0
+                          actions:
+                            - action: STOP_HA_TIMER_ALERT
+                              title: "Stop Timer"
+            else:
+              - repeat:
+                  for_each: "{{ notify_actions }}"
+                  sequence:
+                    - action: "{{ repeat.item }}"
+                      data:
+                        title: "Timer finished"
+                        message: "{{ alert_message }}"
+                        data:
+                          tag: "ha_timer_alert"
+                          push:
+                            sound:
+                              name: default
+                              critical: 1
+                              volume: 1.0
+                          actions:
+                            - action: STOP_HA_TIMER_ALERT
+                              title: "Stop Timer"
+
+          - if:
+              - condition: template
+                value_template: "{{ notify_entities | count > 0 }}"
+            then:
+              - action: notify.send_message
+                target:
+                  entity_id: !input notify_entities
+                data:
+                  title: "Timer finished"
+                  message: "{{ alert_message }}"
+
+          # ---------- Loop the alert until a stop phrase / notification button ----------
+          # As above, a named stop phrase for a different timer is ignored.
+          - repeat:
+              until:
+                - condition: template
+                  value_template: >-
+                    {% set name_slot = wait.trigger.slots.name
+                       if wait.trigger is not none and wait.trigger.slots is defined
+                          and 'name' in wait.trigger.slots
+                       else none %}
+                    {{ wait.trigger is not none and
+                       (name_slot is none or
+                        (name_slot | lower) in (timer_name | lower) or
+                        (timer_name | lower) in (name_slot | lower)) }}
+              sequence:
+                - if:
+                    - condition: template
+                      value_template: >-
+                        {{ target_player != '' and alarm_mode in ['sound', 'both'] }}
+                  then:
+                    - action: media_player.play_media
+                      target:
+                        entity_id: "{{ target_player }}"
+                      data:
+                        media_content_id: !input alarm_sound
+                        media_content_type: music
+                - if:
+                    - condition: template
+                      value_template: >-
+                        {{ target_satellite != '' and alarm_mode in ['tts', 'both'] }}
+                  then:
+                    - action: assist_satellite.announce
+                      target:
+                        entity_id: "{{ target_satellite }}"
+                      data:
+                        message: "{{ alert_message }}"
+                - wait_for_trigger:
+                    - trigger: conversation
+                      command: !input stop_sentences
+                    - trigger: event
+                      event_type: mobile_app_notification_action
+                      event_data:
+                        action: STOP_HA_TIMER_ALERT
+                    - trigger: event
+                      event_type: state_changed
+                      event_data:
+                        entity_id: "{{ target_button }}"
+                  timeout:
+                    seconds: !input repeat_interval
+                  continue_on_timeout: true
+
+          - if:
+              - condition: template
+                value_template: "{{ target_player != '' }}"
+            then:
+              - action: media_player.media_stop
+                target:
+                  entity_id: "{{ target_player }}"
+
+          - repeat:
+              for_each: "{{ notify_actions }}"
+              sequence:
+                - action: "{{ repeat.item }}"
+                  data:
+                    message: "clear_notification"
+                    data:
+                      tag: "ha_timer_alert"
+
+mode: restart
