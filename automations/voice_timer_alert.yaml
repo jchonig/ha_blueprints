@@ -19,7 +19,7 @@ blueprint:
     - Pressing the physical button on the originating satellite
     - Saying a stop phrase before it finishes cancels it outright
 
-    🚀 Version 2026.07.20.12
+    🚀 Version 2026.07.20.13
 
     Setup:
     - Only the `timer` helper itself needs to be created by hand
