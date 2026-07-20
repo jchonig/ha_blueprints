@@ -19,23 +19,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Bump version lines in changed blueprints
+      - name: Bump version lines and commit
         run: |
           mapfile -t files < <(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" -- 'automations/*.yaml' 'scripts/*.yaml')
           if [ "${#files[@]}" -eq 0 ]; then
             echo "No blueprint files changed."
             exit 0
           fi
+
           python3 .github/scripts/bump_blueprint_version.py "${files[@]}"
 
-      - name: Commit version bump
-        run: |
+          if git diff --quiet -- "${files[@]}"; then
+            echo "No version changes to commit."
+            exit 0
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet; then
-            git add -A -- automations scripts
-            git commit -m "Bump blueprint version [skip ci]"
-            git push
-          else
-            echo "No version changes to commit."
-          fi
+          git add -- "${files[@]}"
+          git commit -m "Bump blueprint version [skip ci]"
+          git push
