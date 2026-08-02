@@ -80,7 +80,11 @@ blueprint:
         or any URL your media players can play. The default assumes a
         file named alarm.mp3 directly in your Home Assistant `/media`
         folder — media-source://media_source/local/X means /media/X,
-        not /media/local/X.
+        not /media/local/X. Played via the originating Assist
+        satellite's own announce feature (ducks/restores other audio
+        automatically), falling back to the fallback media player's
+        plain play_media (no ducking) when the command didn't come
+        from a satellite.
       default: "media-source://media_source/local/alarm.mp3"
       selector:
         text:
@@ -102,8 +106,10 @@ blueprint:
     repeat_interval:
       name: Repeat interval
       description: >-
-        Seconds between loops of the alarm sound. Set roughly to the
-        length of the sound file itself.
+        Target seconds between the start of each alert repeat. The
+        actual sound/TTS playback time is measured and subtracted from
+        the wait, so this is the total cycle length, not extra silence
+        added on top of however long the alert takes to play.
       default: 15
       selector:
         number:
@@ -189,6 +195,7 @@ variables:
   timer_entity_id: !input timer_entity
   fallback_player_id: !input fallback_media_player
   alarm_mode: !input alarm_mode
+  repeat_interval: !input repeat_interval
   notify_actions: !input notify_actions
   notify_entities: !input notify_entities
   show_progress: !input show_progress
@@ -459,6 +466,9 @@ actions:
                         (name_slot | lower) in (timer_name | lower) or
                         (timer_name | lower) in (name_slot | lower)) }}
               sequence:
+                - variables:
+                    loop_iteration_start: "{{ now().timestamp() }}"
+
                 # TTS goes first: assist_satellite.announce blocks until it
                 # finishes and can interrupt/override whatever the speaker
                 # is currently playing, so a sound file played beforehand
@@ -474,10 +484,26 @@ actions:
                         entity_id: "{{ target_satellite }}"
                       data:
                         message: "{{ alert_message }}"
+                # Sound also goes through assist_satellite.announce when a
+                # satellite is available — it ducks/restores other audio the
+                # same way the TTS message does. media_player.play_media is
+                # only used as a fallback when the command didn't come from
+                # a satellite (no assist_satellite entity to announce
+                # through), and doesn't duck/restore anything on its own.
                 - if:
                     - condition: template
                       value_template: >-
-                        {{ target_player != '' and alarm_mode in ['sound', 'both'] }}
+                        {{ target_satellite != '' and alarm_mode in ['sound', 'both'] }}
+                  then:
+                    - action: assist_satellite.announce
+                      target:
+                        entity_id: "{{ target_satellite }}"
+                      data:
+                        media_id: !input alarm_sound
+                - if:
+                    - condition: template
+                      value_template: >-
+                        {{ target_satellite == '' and target_player != '' and alarm_mode in ['sound', 'both'] }}
                   then:
                     - action: media_player.play_media
                       target:
@@ -497,7 +523,9 @@ actions:
                       event_data:
                         entity_id: "{{ target_button }}"
                   timeout:
-                    seconds: !input repeat_interval
+                    seconds: >-
+                      {% set elapsed = now().timestamp() - (loop_iteration_start | float) %}
+                      {{ [repeat_interval - elapsed, 1] | max }}
                   continue_on_timeout: true
 
           - if:
