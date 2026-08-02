@@ -21,7 +21,13 @@ jobs:
 
       - name: Bump version lines and commit
         run: |
-          mapfile -t files < <(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" -- 'automations/*.yaml' 'scripts/*.yaml')
+          before="${{ github.event.before }}"
+          if git cat-file -e "$before" 2>/dev/null; then
+            mapfile -t files < <(git diff --name-only "$before" "${{ github.sha }}" -- 'automations/*.yaml' 'scripts/*.yaml')
+          else
+            echo "Before commit $before not found (likely a force-push) — checking all blueprint files instead."
+            mapfile -t files < <(git ls-files -- 'automations/*.yaml' 'scripts/*.yaml')
+          fi
           if [ "${#files[@]}" -eq 0 ]; then
             echo "No blueprint files changed."
             exit 0
