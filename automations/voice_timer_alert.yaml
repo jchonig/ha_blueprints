@@ -459,46 +459,41 @@ actions:
                         (name_slot | lower) in (timer_name | lower) or
                         (timer_name | lower) in (name_slot | lower)) }}
               sequence:
-                # Playback and the stop-listener run in parallel, so a stop
-                # signal during the sound/TTS itself (which can block until
-                # it finishes playing) isn't missed while nothing's listening.
-                - parallel:
-                    - sequence:
-                        - if:
-                            - condition: template
-                              value_template: >-
-                                {{ target_player != '' and alarm_mode in ['sound', 'both'] }}
-                          then:
-                            - action: media_player.play_media
-                              target:
-                                entity_id: "{{ target_player }}"
-                              data:
-                                media_content_id: !input alarm_sound
-                                media_content_type: music
-                        - if:
-                            - condition: template
-                              value_template: >-
-                                {{ target_satellite != '' and alarm_mode in ['tts', 'both'] }}
-                          then:
-                            - action: assist_satellite.announce
-                              target:
-                                entity_id: "{{ target_satellite }}"
-                              data:
-                                message: "{{ alert_message }}"
-                    - wait_for_trigger:
-                        - trigger: conversation
-                          command: !input stop_sentences
-                        - trigger: event
-                          event_type: mobile_app_notification_action
-                          event_data:
-                            action: STOP_HA_TIMER_ALERT
-                        - trigger: event
-                          event_type: state_changed
-                          event_data:
-                            entity_id: "{{ target_button }}"
-                      timeout:
-                        seconds: !input repeat_interval
-                      continue_on_timeout: true
+                - if:
+                    - condition: template
+                      value_template: >-
+                        {{ target_player != '' and alarm_mode in ['sound', 'both'] }}
+                  then:
+                    - action: media_player.play_media
+                      target:
+                        entity_id: "{{ target_player }}"
+                      data:
+                        media_content_id: !input alarm_sound
+                        media_content_type: music
+                - if:
+                    - condition: template
+                      value_template: >-
+                        {{ target_satellite != '' and alarm_mode in ['tts', 'both'] }}
+                  then:
+                    - action: assist_satellite.announce
+                      target:
+                        entity_id: "{{ target_satellite }}"
+                      data:
+                        message: "{{ alert_message }}"
+                - wait_for_trigger:
+                    - trigger: conversation
+                      command: !input stop_sentences
+                    - trigger: event
+                      event_type: mobile_app_notification_action
+                      event_data:
+                        action: STOP_HA_TIMER_ALERT
+                    - trigger: event
+                      event_type: state_changed
+                      event_data:
+                        entity_id: "{{ target_button }}"
+                  timeout:
+                    seconds: !input repeat_interval
+                  continue_on_timeout: true
 
           - if:
               - condition: template
