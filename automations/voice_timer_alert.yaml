@@ -459,6 +459,21 @@ actions:
                         (name_slot | lower) in (timer_name | lower) or
                         (timer_name | lower) in (name_slot | lower)) }}
               sequence:
+                # TTS goes first: assist_satellite.announce blocks until it
+                # finishes and can interrupt/override whatever the speaker
+                # is currently playing, so a sound file played beforehand
+                # would get cut off. Playing the sound second means nothing
+                # comes after it to interrupt it.
+                - if:
+                    - condition: template
+                      value_template: >-
+                        {{ target_satellite != '' and alarm_mode in ['tts', 'both'] }}
+                  then:
+                    - action: assist_satellite.announce
+                      target:
+                        entity_id: "{{ target_satellite }}"
+                      data:
+                        message: "{{ alert_message }}"
                 - if:
                     - condition: template
                       value_template: >-
@@ -470,16 +485,6 @@ actions:
                       data:
                         media_content_id: !input alarm_sound
                         media_content_type: music
-                - if:
-                    - condition: template
-                      value_template: >-
-                        {{ target_satellite != '' and alarm_mode in ['tts', 'both'] }}
-                  then:
-                    - action: assist_satellite.announce
-                      target:
-                        entity_id: "{{ target_satellite }}"
-                      data:
-                        message: "{{ alert_message }}"
                 - wait_for_trigger:
                     - trigger: conversation
                       command: !input stop_sentences
