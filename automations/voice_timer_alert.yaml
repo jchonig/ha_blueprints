@@ -299,8 +299,16 @@ actions:
                           tag: "ha_timer_alert"
                           live_update: true
                           chronometer: true
-                          when: "{{ duration_seconds }}"
-                          when_relative: true
+                          # Absolute Unix timestamp, not when_relative: true —
+                          # the Android app has a history of dropping
+                          # when_relative, and even when it works, a relative
+                          # offset gets anchored to whenever the phone
+                          # actually renders the notification (which Doze/App
+                          # Standby can delay until the screen unlocks),
+                          # desyncing the countdown from the real timer. An
+                          # absolute timestamp is delivery-time independent.
+                          when: "{{ (as_timestamp(now()) + duration_seconds) | int }}"
+                          when_relative: false
 
           # Hand off to a decoupled run so this conversation turn — and any
           # media ducking tied to it — ends here instead of for the whole countdown.
