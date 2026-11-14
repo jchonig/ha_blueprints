@@ -23,7 +23,7 @@ blueprint:
     - Saying a stop phrase before it finishes cancels it outright
 
 <<<<<<< HEAD
-    🚀 Version 2026.09.28.1
+    🚀 Version 2026.11.14.1
 =======
     Restarting the timer while the alert is going (e.g. the Tessera
     Timers plugin's +1m) silences it and alerts again when the new
