@@ -2,7 +2,8 @@ blueprint:
   name: Voice Timer
   description: |-
     Start a Home Assistant `timer` helper by voice, with a spoken
-    confirmation of the duration.
+    confirmation of the duration — or from anywhere else (a dashboard
+    or Tessera screen tile, the HA UI), alerting on a default device.
 
     Optionally shows a live countdown on your phone (Notify actions
     only — see Show live countdown below).
@@ -17,9 +18,19 @@ blueprint:
       timers don't stop each other)
     - Tapping the notification button
     - Pressing the physical button on the originating satellite
+    - Turning off a screen's "Timer done" sensor (e.g. the Tessera
+      Timers plugin's Stop button)
     - Saying a stop phrase before it finishes cancels it outright
 
+<<<<<<< HEAD
     🚀 Version 2026.09.28.1
+=======
+    Restarting the timer while the alert is going (e.g. the Tessera
+    Timers plugin's +1m) silences it and alerts again when the new
+    countdown finishes.
+
+    🚀 Version 2026.08.02.11
+>>>>>>> a5fa35f (Alert on a default satellite for non-voice timer starts)
 
     Setup:
     - Only the `timer` helper itself needs to be created by hand
@@ -39,13 +50,25 @@ blueprint:
         entity:
           domain: timer
 
+    default_satellite:
+      name: Default Assist satellite
+      description: >-
+        Optional. Where the alert sound/TTS goes when the timer wasn't
+        started by voice from a satellite — e.g. started from a
+        dashboard or Tessera screen tile, or typed into the Assist chat
+        window. Takes priority over the fallback media player below.
+      default: ""
+      selector:
+        entity:
+          domain: assist_satellite
+
     fallback_media_player:
       name: Fallback media player
       description: >-
         Optional. Used only if the start command didn't come from a
-        satellite device with its own media_player (e.g. typed into the
-        Assist chat window, or from a voice assistant without a
-        speaker). If left blank and no such device is found, the alert
+        satellite device with its own media_player and no default
+        Assist satellite is set. Plays the sound file only (no TTS, no
+        ducking). If left blank and no device is found, the alert
         sound/TTS is skipped (the phone notification, if configured,
         still fires).
       default: ""
@@ -159,6 +182,20 @@ blueprint:
       selector:
         boolean:
 
+    done_sensors:
+      name: Screen "Timer done" sensors
+      description: >-
+        Optional. Binary sensors that are on while a screen shows this
+        timer as done, e.g. the Tessera Timers plugin's "Timer done"
+        sensor. Turning one off (the screen's Stop button) silences the
+        alert. Stopping the alert any other way doesn't silence the
+        screen's own sound.
+      default: []
+      selector:
+        entity:
+          domain: binary_sensor
+          multiple: true
+
     start_sentences:
       name: Start sentences
       description: |-
@@ -193,6 +230,7 @@ blueprint:
 
 variables:
   timer_entity_id: !input timer_entity
+  default_satellite_id: !input default_satellite
   fallback_player_id: !input fallback_media_player
   alarm_mode: !input alarm_mode
   repeat_interval: !input repeat_interval
@@ -218,8 +256,21 @@ triggers:
     event_type: voice_timer_alert_continue
     event_data:
       timer_entity_id: !input timer_entity
+  # Started some other way (dashboard/screen tile, HA UI). A voice start
+  # also flips the timer idle -> active, and the alert loop watches for
+  # it as a snooze, so the condition below skips this trigger whenever
+  # a run is already in progress.
+  - trigger: state
+    id: other_start
+    entity_id: !input timer_entity
+    from: idle
+    to: active
 
-conditions: []
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.id != 'other_start' or
+         (this.attributes.current | default(0) | int(0)) == 0 }}
 
 actions:
   - choose:
@@ -317,6 +368,16 @@ actions:
               timer_entity_id: "{{ timer_entity_id }}"
               device_id: "{{ trigger.device_id | default('', true) }}"
 
+      # ================= Started without voice: just hand off =================
+      - conditions:
+          - condition: trigger
+            id: other_start
+        sequence:
+          - event: voice_timer_alert_continue
+            event_data:
+              timer_entity_id: "{{ timer_entity_id }}"
+              device_id: ""
+
       # ================= Decoupled: wait for finish/cancel, then alert =================
       - conditions:
           - condition: trigger
@@ -335,7 +396,7 @@ actions:
                    if start_device_id not in ['', 'unknown', 'unavailable', none]
                    else [] %}
                 {% set sats = ents | select('match', '^assist_satellite\\.') | list %}
-                {{ sats[0] if sats else '' }}
+                {{ sats[0] if sats else default_satellite_id }}
 
           # ---------- Wait inline for this timer to finish, or a cancel ----------
           # A named stop phrase that doesn't match this timer is ignored and
@@ -357,6 +418,11 @@ actions:
                     - trigger: event
                       id: finished
                       event_type: timer.finished
+                      event_data:
+                        entity_id: !input timer_entity
+                    - trigger: event
+                      id: cancel
+                      event_type: timer.cancelled
                       event_data:
                         entity_id: !input timer_entity
                     - trigger: conversation
@@ -530,6 +596,14 @@ actions:
                       event_type: state_changed
                       event_data:
                         entity_id: "{{ target_button }}"
+                    - trigger: state
+                      entity_id: !input done_sensors
+                      from: "on"
+                      to: "off"
+                    - trigger: state
+                      id: snooze
+                      entity_id: !input timer_entity
+                      to: active
                   timeout:
                     seconds: >-
                       {% set elapsed = now().timestamp() - (loop_iteration_start | float) %}
@@ -552,5 +626,16 @@ actions:
                     message: "clear_notification"
                     data:
                       tag: "ha_timer_alert"
+
+          # Timer restarted mid-alert (snooze): follow the new countdown on
+          # the same device. Must be last — mode: restart ends this run.
+          - if:
+              - condition: template
+                value_template: "{{ wait.trigger is not none and wait.trigger.id == 'snooze' }}"
+            then:
+              - event: voice_timer_alert_continue
+                event_data:
+                  timer_entity_id: "{{ timer_entity_id }}"
+                  device_id: "{{ start_device_id }}"
 
 mode: restart

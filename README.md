@@ -30,6 +30,12 @@ stop phrase naming the timer, tap the notification button, or press
 the satellite's physical button to silence it — only the timer helper
 itself needs to be created by hand.
 
+A timer started some other way (a dashboard tile, a Tessera screen
+with the [Timers plugin](https://github.com/heronimonimo/tessera-timers),
+the HA UI) alerts on a default Assist satellite. Add the screen's
+"Timer done" sensor and its Stop button silences the alert too; its
++1m button snoozes it.
+
 ## Scripts
 
 ### ZSE50 Siren Alert
