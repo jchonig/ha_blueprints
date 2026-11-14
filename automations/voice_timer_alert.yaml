@@ -22,15 +22,11 @@ blueprint:
       Timers plugin's Stop button)
     - Saying a stop phrase before it finishes cancels it outright
 
-<<<<<<< HEAD
-    🚀 Version 2026.11.14.1
-=======
     Restarting the timer while the alert is going (e.g. the Tessera
     Timers plugin's +1m) silences it and alerts again when the new
     countdown finishes.
 
-    🚀 Version 2026.08.02.11
->>>>>>> a5fa35f (Alert on a default satellite for non-voice timer starts)
+    🚀 Version 2026.11.14.1
 
     Setup:
     - Only the `timer` helper itself needs to be created by hand
