@@ -16,7 +16,7 @@ blueprint:
     Silence it by:
     - Saying a stop phrase (optionally naming the timer, so concurrent
       timers don't stop each other)
-    - Tapping the notification button
+    - Tapping the notification button (heard even mid-sound)
     - Pressing the physical button on the originating satellite
     - Turning off a screen's "Timer done" sensor (e.g. the Tessera
       Timers plugin's Stop button)
@@ -184,8 +184,9 @@ blueprint:
         Optional. Binary sensors that are on while a screen shows this
         timer as done, e.g. the Tessera Timers plugin's "Timer done"
         sensor. Turning one off (the screen's Stop button) silences the
-        alert. Stopping the alert any other way doesn't silence the
-        screen's own sound.
+        alert — at once between sounds, or when the sound already
+        playing ends. Stopping the alert any other way doesn't silence
+        the screen's own sound.
       default: []
       selector:
         entity:
@@ -233,6 +234,7 @@ variables:
   notify_actions: !input notify_actions
   notify_entities: !input notify_entities
   show_progress: !input show_progress
+  done_sensor_ids: !input done_sensors
   timer_name: "{{ state_attr(timer_entity_id, 'friendly_name') or timer_entity_id }}"
   tts_message_input: !input tts_message
   alert_message: >-
@@ -261,12 +263,26 @@ triggers:
     entity_id: !input timer_entity
     from: idle
     to: active
+  # Phone Stop button. A trigger here rather than in the alert loop's
+  # wait: a one-off event that arrives while the loop is blocked on
+  # assist_satellite.announce would otherwise be lost. mode: restart
+  # ends the alert run; the branch below cleans up after it.
+  - trigger: event
+    id: phone_stop
+    event_type: mobile_app_notification_action
+    event_data:
+      action: STOP_HA_TIMER_ALERT
 
 conditions:
   - condition: template
     value_template: >-
       {{ trigger.id != 'other_start' or
          (this.attributes.current | default(0) | int(0)) == 0 }}
+  # Only while the alert can be going, so a stale notification can't
+  # end a running or paused countdown.
+  - condition: template
+    value_template: >-
+      {{ trigger.id != 'phone_stop' or is_state(timer_entity_id, 'idle') }}
 
 actions:
   - choose:
@@ -373,6 +389,27 @@ actions:
             event_data:
               timer_entity_id: "{{ timer_entity_id }}"
               device_id: ""
+
+      # ================= Phone Stop: the restart ended the alert, clean up =================
+      - conditions:
+          - condition: trigger
+            id: phone_stop
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ fallback_player_id != '' }}"
+            then:
+              - action: media_player.media_stop
+                target:
+                  entity_id: "{{ fallback_player_id }}"
+          - repeat:
+              for_each: "{{ notify_actions }}"
+              sequence:
+                - action: "{{ repeat.item }}"
+                  data:
+                    message: "clear_notification"
+                    data:
+                      tag: "ha_timer_alert"
 
       # ================= Decoupled: wait for finish/cancel, then alert =================
       - conditions:
@@ -521,8 +558,14 @@ actions:
                   title: "Timer finished"
                   message: "{{ alert_message }}"
 
-          # ---------- Loop the alert until a stop phrase / notification button ----------
+          # ---------- Loop the alert until a stop phrase / button / screen Stop ----------
           # As above, a named stop phrase for a different timer is ignored.
+          # assist_satellite.announce blocks while the sound plays, and the
+          # wait below only listens after it, so the screen's Stop (done
+          # sensor turned off since the alert began) and a snooze (timer
+          # restarted) are also checked as states, not just as triggers.
+          - variables:
+              alert_start: "{{ now().timestamp() }}"
           - repeat:
               until:
                 - condition: template
@@ -531,10 +574,17 @@ actions:
                        if wait.trigger is not none and wait.trigger.slots is defined
                           and 'name' in wait.trigger.slots
                        else none %}
-                    {{ wait.trigger is not none and
-                       (name_slot is none or
-                        (name_slot | lower) in (timer_name | lower) or
-                        (timer_name | lower) in (name_slot | lower)) }}
+                    {% set ns = namespace(screen_stopped=false) %}
+                    {% for e in done_sensor_ids
+                       if is_state(e, 'off') and
+                          states[e].last_changed.timestamp() > alert_start | float %}
+                      {% set ns.screen_stopped = true %}
+                    {% endfor %}
+                    {{ ns.screen_stopped or is_state(timer_entity_id, 'active') or
+                       (wait.trigger is not none and
+                        (name_slot is none or
+                         (name_slot | lower) in (timer_name | lower) or
+                         (timer_name | lower) in (name_slot | lower))) }}
               sequence:
                 - variables:
                     loop_iteration_start: "{{ now().timestamp() }}"
@@ -581,30 +631,38 @@ actions:
                       data:
                         media_content_id: !input alarm_sound
                         media_content_type: music
-                - wait_for_trigger:
-                    - trigger: conversation
-                      command: !input stop_sentences
-                    - trigger: event
-                      event_type: mobile_app_notification_action
-                      event_data:
-                        action: STOP_HA_TIMER_ALERT
-                    - trigger: event
-                      event_type: state_changed
-                      event_data:
-                        entity_id: "{{ target_button }}"
-                    - trigger: state
-                      entity_id: !input done_sensors
-                      from: "on"
-                      to: "off"
-                    - trigger: state
-                      id: snooze
-                      entity_id: !input timer_entity
-                      to: active
-                  timeout:
-                    seconds: >-
-                      {% set elapsed = now().timestamp() - (loop_iteration_start | float) %}
-                      {{ [repeat_interval - elapsed, 1] | max }}
-                  continue_on_timeout: true
+                # Skip the wait if the screen's Stop or a snooze already
+                # happened during the sound; the until above then ends the loop.
+                - if:
+                    - condition: template
+                      value_template: >-
+                        {% set ns = namespace(screen_stopped=false) %}
+                        {% for e in done_sensor_ids
+                           if is_state(e, 'off') and
+                              states[e].last_changed.timestamp() > alert_start | float %}
+                          {% set ns.screen_stopped = true %}
+                        {% endfor %}
+                        {{ not ns.screen_stopped and not is_state(timer_entity_id, 'active') }}
+                  then:
+                    - wait_for_trigger:
+                        - trigger: conversation
+                          command: !input stop_sentences
+                        - trigger: event
+                          event_type: state_changed
+                          event_data:
+                            entity_id: "{{ target_button }}"
+                        - trigger: state
+                          entity_id: !input done_sensors
+                          from: "on"
+                          to: "off"
+                        - trigger: state
+                          entity_id: !input timer_entity
+                          to: active
+                      timeout:
+                        seconds: >-
+                          {% set elapsed = now().timestamp() - (loop_iteration_start | float) %}
+                          {{ [repeat_interval - elapsed, 1] | max }}
+                      continue_on_timeout: true
 
           - if:
               - condition: template
@@ -627,7 +685,7 @@ actions:
           # the same device. Must be last — mode: restart ends this run.
           - if:
               - condition: template
-                value_template: "{{ wait.trigger is not none and wait.trigger.id == 'snooze' }}"
+                value_template: "{{ is_state(timer_entity_id, 'active') }}"
             then:
               - event: voice_timer_alert_continue
                 event_data:
