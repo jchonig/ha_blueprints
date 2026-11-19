@@ -18,9 +18,12 @@ blueprint:
       timers don't stop each other)
     - Tapping the notification button (heard even mid-sound)
     - Pressing the physical button on the originating satellite
-    - Turning off a screen's "Timer done" sensor (e.g. the Tessera
-      Timers plugin's Stop button)
+    - Tapping Stop on a screen's tile (the Tessera Timers plugin's
+      "Timers done" or "Timer done" sensor)
     - Saying a stop phrase before it finishes cancels it outright
+
+    Silencing it any other way also presses the screen's "Silence
+    timers" button, if given, so the screen stops sounding too.
 
     Restarting the timer while the alert is going (e.g. the Tessera
     Timers plugin's +1m) silences it and alerts again when the new
@@ -179,18 +182,39 @@ blueprint:
         boolean:
 
     done_sensors:
-      name: Screen "Timer done" sensors
+      name: Screen "Timers done" sensors
       description: >-
-        Optional. Binary sensors that are on while a screen shows this
-        timer as done, e.g. the Tessera Timers plugin's "Timer done"
-        sensor. Turning one off (the screen's Stop button) silences the
-        alert — at once between sounds, or when the sound already
-        playing ends. Stopping the alert any other way doesn't silence
-        the screen's own sound.
+        Optional. Sensors that show a screen has this timer done, which
+        tapping the screen's Stop clears; that silences the alert — at
+        once between sounds, or when the sound already playing ends.
+        Best is the Tessera Timers plugin's (0.4.0+) "Timers done"
+        sensor, which lists the done timer helpers (e.g. `timer.eggs,
+        timer.rice`), so each timer's Stop silences only its own alert.
+        The older "Timer done" binary sensor also works, but is shared by
+        every timer tile on the screen, so use it only on a screen with
+        a single timer.
       default: []
       selector:
         entity:
-          domain: binary_sensor
+          domain:
+            - sensor
+            - binary_sensor
+          multiple: true
+
+    silence_buttons:
+      name: Screen "Silence timers" buttons
+      description: >-
+        Optional. Buttons pressed when the alert is silenced some other
+        way than the screen's Stop (a stop phrase, the notification, the
+        satellite's button), so the screen stops sounding too, e.g. the
+        Tessera Timers plugin's (0.4.0+) "Silence timers" button. It
+        silences every done timer on its screen, so if that screen's
+        "Timers done" sensor is selected above, it's pressed only while
+        this is the only timer helper done there.
+      default: []
+      selector:
+        entity:
+          domain: button
           multiple: true
 
     start_sentences:
@@ -235,6 +259,9 @@ variables:
   notify_entities: !input notify_entities
   show_progress: !input show_progress
   done_sensor_ids: !input done_sensors
+  done_binary_ids: "{{ done_sensor_ids | select('match', '^binary_sensor\\.') | list }}"
+  done_list_ids: "{{ done_sensor_ids | select('match', '^sensor\\.') | list }}"
+  silence_button_ids: !input silence_buttons
   timer_name: "{{ state_attr(timer_entity_id, 'friendly_name') or timer_entity_id }}"
   tts_message_input: !input tts_message
   alert_message: >-
@@ -562,10 +589,43 @@ actions:
           # As above, a named stop phrase for a different timer is ignored.
           # assist_satellite.announce blocks while the sound plays, and the
           # wait below only listens after it, so the screen's Stop (done
-          # sensor turned off since the alert began) and a snooze (timer
-          # restarted) are also checked as states, not just as triggers.
+          # sensor turned off, or this timer gone from a "Timers done" list,
+          # since the alert began) and a snooze (timer restarted) are also
+          # checked as states, not just as triggers.
+          #
+          # A "Timers done" list only counts once it has named this timer,
+          # so a list that changes for another timer before the screen
+          # catches up isn't taken for a Stop: give the screen a moment.
+          - if:
+              - condition: template
+                value_template: >-
+                  {% set ns = namespace(found=false) %}
+                  {% for e in done_list_ids
+                     if timer_entity_id in states(e).split(', ') %}
+                    {% set ns.found = true %}
+                  {% endfor %}
+                  {{ done_list_ids | count > 0 and not ns.found }}
+            then:
+              - wait_template: >-
+                  {% set ns = namespace(found=false) %}
+                  {% for e in done_list_ids
+                     if timer_entity_id in states(e).split(', ') %}
+                    {% set ns.found = true %}
+                  {% endfor %}
+                  {{ ns.found }}
+                timeout:
+                  seconds: 5
+                continue_on_timeout: true
           - variables:
               alert_start: "{{ now().timestamp() }}"
+              # The "Timers done" lists that name this timer
+              alert_list_ids: >-
+                {% set ns = namespace(ids=[]) %}
+                {% for e in done_list_ids
+                   if timer_entity_id in states(e).split(', ') %}
+                  {% set ns.ids = ns.ids + [e] %}
+                {% endfor %}
+                {{ ns.ids }}
           - repeat:
               until:
                 - condition: template
@@ -575,9 +635,14 @@ actions:
                           and 'name' in wait.trigger.slots
                        else none %}
                     {% set ns = namespace(screen_stopped=false) %}
-                    {% for e in done_sensor_ids
+                    {% for e in done_binary_ids
                        if is_state(e, 'off') and
                           states[e].last_changed.timestamp() > alert_start | float %}
+                      {% set ns.screen_stopped = true %}
+                    {% endfor %}
+                    {% for e in alert_list_ids
+                       if has_value(e) and
+                          timer_entity_id not in states(e).split(', ') %}
                       {% set ns.screen_stopped = true %}
                     {% endfor %}
                     {{ ns.screen_stopped or is_state(timer_entity_id, 'active') or
@@ -637,9 +702,14 @@ actions:
                     - condition: template
                       value_template: >-
                         {% set ns = namespace(screen_stopped=false) %}
-                        {% for e in done_sensor_ids
+                        {% for e in done_binary_ids
                            if is_state(e, 'off') and
                               states[e].last_changed.timestamp() > alert_start | float %}
+                          {% set ns.screen_stopped = true %}
+                        {% endfor %}
+                        {% for e in alert_list_ids
+                           if has_value(e) and
+                              timer_entity_id not in states(e).split(', ') %}
                           {% set ns.screen_stopped = true %}
                         {% endfor %}
                         {{ not ns.screen_stopped and not is_state(timer_entity_id, 'active') }}
@@ -655,6 +725,17 @@ actions:
                           entity_id: !input done_sensors
                           from: "on"
                           to: "off"
+                        # A state trigger on a "Timers done" list would also
+                        # fire when another timer is added to or leaves it
+                        - trigger: template
+                          value_template: >-
+                            {% set ns = namespace(screen_stopped=false) %}
+                            {% for e in alert_list_ids
+                               if has_value(e) and
+                                  timer_entity_id not in states(e).split(', ') %}
+                              {% set ns.screen_stopped = true %}
+                            {% endfor %}
+                            {{ ns.screen_stopped }}
                         - trigger: state
                           entity_id: !input timer_entity
                           to: active
@@ -663,6 +744,48 @@ actions:
                           {% set elapsed = now().timestamp() - (loop_iteration_start | float) %}
                           {{ [repeat_interval - elapsed, 1] | max }}
                       continue_on_timeout: true
+
+          # Silenced some other way than the screen's Stop (a snooze
+          # restarts the screen's tile itself): silence the screen too.
+          # "Silence timers" stops every done timer on its screen, so skip
+          # a screen whose "Timers done" list names another timer as well,
+          # or no longer names this one.
+          - variables:
+              silence_ids: >-
+                {% set ns = namespace(ids=[], screen_stopped=false) %}
+                {% for e in done_binary_ids
+                   if is_state(e, 'off') and
+                      states[e].last_changed.timestamp() > alert_start | float %}
+                  {% set ns.screen_stopped = true %}
+                {% endfor %}
+                {% for e in alert_list_ids
+                   if has_value(e) and
+                      timer_entity_id not in states(e).split(', ') %}
+                  {% set ns.screen_stopped = true %}
+                {% endfor %}
+                {% if not ns.screen_stopped and
+                      not is_state(timer_entity_id, 'active') %}
+                  {% for b in silence_button_ids %}
+                    {% set p = namespace(ok=true) %}
+                    {% for e in done_list_ids
+                       if device_id(b) is not none and
+                          device_id(e) == device_id(b) and
+                          states(e).split(', ') != [timer_entity_id] %}
+                      {% set p.ok = false %}
+                    {% endfor %}
+                    {% if p.ok %}
+                      {% set ns.ids = ns.ids + [b] %}
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+                {{ ns.ids }}
+          - if:
+              - condition: template
+                value_template: "{{ silence_ids | count > 0 }}"
+            then:
+              - action: button.press
+                target:
+                  entity_id: "{{ silence_ids }}"
 
           - if:
               - condition: template

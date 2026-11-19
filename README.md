@@ -33,8 +33,10 @@ itself needs to be created by hand.
 A timer started some other way (a dashboard tile, a Tessera screen
 with the [Timers plugin](https://github.com/heronimonimo/tessera-timers),
 the HA UI) alerts on a default Assist satellite. Add the screen's
-"Timer done" sensor and its Stop button silences the alert too; its
-+1m button snoozes it.
+"Timers done" sensor (plugin 0.4.0+) and the timer's Stop button on
+the screen silences its alert too, even with several timer tiles; its
++1m button snoozes it. Add the screen's "Silence timers" button and
+silencing the alert any other way silences the screen as well.
 
 ## Scripts
 
