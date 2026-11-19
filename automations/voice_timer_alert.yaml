@@ -29,7 +29,7 @@ blueprint:
     Timers plugin's +1m) silences it and alerts again when the new
     countdown finishes.
 
-    🚀 Version 2026.11.14.3
+    🚀 Version 2026.11.19.1
 
     Setup:
     - Only the `timer` helper itself needs to be created by hand
